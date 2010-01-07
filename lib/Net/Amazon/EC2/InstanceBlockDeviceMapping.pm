@@ -1,13 +1,14 @@
-package Net::Amazon::EC2::Attachment;
+package Net::Amazon::EC2::InstanceBlockDeviceMapping;
+use strict;
 use Moose;
 
 =head1 NAME
 
-Net::Amazon::EC2::Attachment
+Net::Amazon::EC2::InstanceBlockDeviceMapping
 
 =head1 DESCRIPTION
 
-A class representing a volume attachment to an instance
+A class representing a instance block device mapping
 
 =head1 ATTRIBUTES
 
@@ -15,35 +16,25 @@ A class representing a volume attachment to an instance
 
 =item volume_id (required)
 
-The ID of the volume.
-
-=item instance_id (required)
-
-The ID of the instance which this volume was attached to.
-
-=item device (required)
-
-The device path on the instance that the volume was attached as.
+The volume id of the EBS Volume.
 
 =item status (required)
 
-The attachment's status.
+The status of the attachment.
 
 =item attach_time (required)
 
-The time the volume was attached.
+The time of attachment.
 
 =item delete_on_termination (required)
 
-This boolean indicates if an volume is terminated upon instance termination.
+A boolean indicating if the volume will be deleted on instance termination.
 
 =back
 
 =cut
 
 has 'volume_id'				=> ( is => 'ro', isa => 'Str', required => 1 );
-has 'instance_id'			=> ( is => 'ro', isa => 'Str', required => 1 );
-has 'device'				=> ( is => 'ro', isa => 'Str', required => 1 );
 has 'status'				=> ( is => 'ro', isa => 'Str', required => 1 );
 has 'attach_time'			=> ( is => 'ro', isa => 'Str', required => 1 );
 has 'delete_on_termination'	=> ( is => 'ro', isa => 'Str', required => 1 );
