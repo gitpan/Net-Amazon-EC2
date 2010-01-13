@@ -57,7 +57,7 @@ use Net::Amazon::EC2::DescribeInstanceAttributeResponse;
 use Net::Amazon::EC2::EbsInstanceBlockDeviceMapping;
 use Net::Amazon::EC2::EbsBlockDevice;
 
-$VERSION = '0.12';
+$VERSION = '0.13';
 
 =head1 NAME
 
@@ -66,8 +66,8 @@ environment.
 
 =head1 VERSION
 
-This document describes version 0.12 of Net::Amazon::EC2, released
-January 7th, 2010. This module is coded against the Query API version of the '2009-11-30' 
+This document describes version 0.13 of Net::Amazon::EC2, released
+January 13th, 2010. This module is coded against the Query API version of the '2009-11-30' 
 version of the EC2 API last updated December 8th, 2009.
 
 =head1 SYNOPSIS
@@ -3834,14 +3834,14 @@ __END__
 
 Set AWS_ACCESS_KEY_ID and SECRET_ACCESS_KEY environment variables to run the live tests.  
 Note: because the live tests start an instance (and kill it) in both the tests and backwards compat tests there will be 2 hours of 
-machine instance usage charges (since there are 2 instances started) which as of January 7th, 2010 costs a total of $0.17 USD
+machine instance usage charges (since there are 2 instances started) which as of January 13th, 2010 costs a total of $0.17 USD
 
 Important note about the windows-only methods.  These have not been well tested as I do not run windows-based instances, so exercise
 caution in using these.
 
 =head1 TODO
 
-Need to add in support for Spot Instances (in the next release).
+Need to add in support for Spot Instances.
 
 =head1 AUTHOR
 
