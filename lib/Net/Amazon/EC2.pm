@@ -57,7 +57,7 @@ use Net::Amazon::EC2::DescribeInstanceAttributeResponse;
 use Net::Amazon::EC2::EbsInstanceBlockDeviceMapping;
 use Net::Amazon::EC2::EbsBlockDevice;
 
-$VERSION = '0.13';
+$VERSION = '0.14';
 
 =head1 NAME
 
@@ -66,8 +66,8 @@ environment.
 
 =head1 VERSION
 
-This document describes version 0.13 of Net::Amazon::EC2, released
-January 13th, 2010. This module is coded against the Query API version of the '2009-11-30' 
+This document describes version 0.14 of Net::Amazon::EC2, released
+February 1st, 2010. This module is coded against the Query API version of the '2009-11-30' 
 version of the EC2 API last updated December 8th, 2009.
 
 =head1 SYNOPSIS
@@ -2277,6 +2277,10 @@ sub describe_snapshots {
 				$snap->{description} = undef;
 			}
 
+			unless ( grep { defined && length } $snap->{progress} and ref $snap->{progress} ne 'HASH') {
+				$snap->{progress} = undef;
+			}
+
  			my $snapshot = Net::Amazon::EC2::Snapshot->new(
  				snapshot_id		=> $snap->{snapshotId},
  				status			=> $snap->{status},
@@ -2969,26 +2973,26 @@ sub register_image {
 	my %args = validate( @_, {
 		ImageLocation		=> { type => SCALAR, optional => 1 },
 		Name				=> { type => SCALAR },
-		description			=> { type => SCALAR, optional => 1 },
-		architecture		=> { type => SCALAR, optional => 1 },
-		kernelId			=> { type => SCALAR, optional => 1 },
-		ramdiskId			=> { type => SCALAR, optional => 1 },
-		rootDeviceName		=> { type => SCALAR, optional => 1 },
-		blockDeviceMapping	=> { type => ARRAYREF, optional => 1 },
+		Description			=> { type => SCALAR, optional => 1 },
+		Architecture		=> { type => SCALAR, optional => 1 },
+		KernelId			=> { type => SCALAR, optional => 1 },
+		RamdiskId			=> { type => SCALAR, optional => 1 },
+		RootDeviceName		=> { type => SCALAR, optional => 1 },
+		BlockDeviceMapping	=> { type => ARRAYREF, optional => 1 },
 	});
 
 	
 	# If we have a array ref of block devices, we need to split them up
-	if (ref ($args{blockDeviceMapping}) eq 'ARRAY') {
-		my $block_devices = delete $args{blockDeviceMapping};
+	if (ref ($args{BlockDeviceMapping}) eq 'ARRAY') {
+		my $block_devices = delete $args{BlockDeviceMapping};
 		my $count = 1;
 		foreach my $block_device (@{$block_devices}) {
-			$args{"BlockDeviceMapping." . $count . ".DeviceName"}				= $block_device->{deviceName};
-			$args{"BlockDeviceMapping." . $count . ".VirtualName"}				= $block_device->{virtualName};
-			$args{"BlockDeviceMapping." . $count . ".NoDevice"}					= $block_device->{noDevice};
-			$args{"BlockDeviceMapping." . $count . ".Ebs.SnapshotId"}			= $block_device->{ebs}{snapshotId};
-			$args{"BlockDeviceMapping." . $count . ".Ebs.VolumeSize"}			= $block_device->{ebs}{volumeSize};
-			$args{"BlockDeviceMapping." . $count . ".Ebs.DeleteOnTermination"}	= $block_device->{ebs}{deleteOnTermination};			
+			$args{"BlockDeviceMapping." . $count . ".DeviceName"}				= $block_device->{deviceName} if $block_device->{deviceName};
+			$args{"BlockDeviceMapping." . $count . ".VirtualName"}				= $block_device->{virtualName} if $block_device->{virtualName};
+			$args{"BlockDeviceMapping." . $count . ".NoDevice"}					= $block_device->{noDevice} if $block_device->{noDevice};
+			$args{"BlockDeviceMapping." . $count . ".Ebs.SnapshotId"}			= $block_device->{ebs}{snapshotId} if $block_device->{ebs}{snapshotId};
+			$args{"BlockDeviceMapping." . $count . ".Ebs.VolumeSize"}			= $block_device->{ebs}{volumeSize} if $block_device->{ebs}{volumeSize};
+			$args{"BlockDeviceMapping." . $count . ".Ebs.DeleteOnTermination"}	= $block_device->{ebs}{deleteOnTermination} if $block_device->{ebs}{deleteOnTermination};
 			$count++;
 		}
 	}
@@ -3834,7 +3838,7 @@ __END__
 
 Set AWS_ACCESS_KEY_ID and SECRET_ACCESS_KEY environment variables to run the live tests.  
 Note: because the live tests start an instance (and kill it) in both the tests and backwards compat tests there will be 2 hours of 
-machine instance usage charges (since there are 2 instances started) which as of January 13th, 2010 costs a total of $0.17 USD
+machine instance usage charges (since there are 2 instances started) which as of February 1st, 2010 costs a total of $0.17 USD
 
 Important note about the windows-only methods.  These have not been well tested as I do not run windows-based instances, so exercise
 caution in using these.

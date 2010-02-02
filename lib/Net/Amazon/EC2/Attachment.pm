@@ -17,7 +17,7 @@ A class representing a volume attachment to an instance
 
 The ID of the volume.
 
-=item instance_id (required)
+=item instance_id (optional)
 
 The ID of the instance which this volume was attached to.
 
@@ -42,11 +42,11 @@ This boolean indicates if an volume is terminated upon instance termination.
 =cut
 
 has 'volume_id'				=> ( is => 'ro', isa => 'Str', required => 1 );
-has 'instance_id'			=> ( is => 'ro', isa => 'Str', required => 1 );
+has 'instance_id'			=> ( is => 'ro', isa => 'Maybe[Str]', required => 0 );
 has 'device'				=> ( is => 'ro', isa => 'Str', required => 1 );
 has 'status'				=> ( is => 'ro', isa => 'Str', required => 1 );
 has 'attach_time'			=> ( is => 'ro', isa => 'Str', required => 1 );
-has 'delete_on_termination'	=> ( is => 'ro', isa => 'Str', required => 1 );
+has 'delete_on_termination'	=> ( is => 'ro', isa => 'Maybe[Str]', required => 0 );
 
 __PACKAGE__->meta->make_immutable();
 
