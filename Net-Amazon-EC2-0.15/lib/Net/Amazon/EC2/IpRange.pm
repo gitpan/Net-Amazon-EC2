@@ -1,29 +1,29 @@
-package Net::Amazon::EC2::AvailabilityZoneMessage;
+package Net::Amazon::EC2::IpRange;
 use Moose;
 
 =head1 NAME
 
-Net::Amazon::EC2::AvailabilityZoneMessage
+Net::Amazon::EC2::IpRange
 
 =head1 DESCRIPTION
 
-A class containing messaging associated with an availability zone.
+A class representing an IP range (CIDR).
 
 =head1 ATTRIBUTES
 
 =over
 
-=item message (required)
+=item cidr_ip (required)
 
-The message itself.
+CIDR IP Range.
+
+=back
 
 =cut
 
-has 'message'  => ( is => 'ro', isa => 'Str', required => 1 );
+has 'cidr_ip'  => ( is => 'ro', isa => 'Str' );
 
 __PACKAGE__->meta->make_immutable();
-
-=back
 
 =head1 AUTHOR
 

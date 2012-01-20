@@ -10,7 +10,7 @@ use Digest::HMAC_SHA1;
 use URI;
 use MIME::Base64 qw(encode_base64 decode_base64);
 use HTTP::Date qw(time2isoz);
-use Params::Validate qw(validate SCALAR ARRAYREF);
+use Params::Validate qw(validate SCALAR ARRAYREF HASHREF);
 use Data::Dumper qw(Dumper);
 
 use Net::Amazon::EC2::DescribeImagesResponse;
@@ -56,8 +56,10 @@ use Net::Amazon::EC2::InstanceStateChange;
 use Net::Amazon::EC2::DescribeInstanceAttributeResponse;
 use Net::Amazon::EC2::EbsInstanceBlockDeviceMapping;
 use Net::Amazon::EC2::EbsBlockDevice;
+use Net::Amazon::EC2::TagSet;
+use Net::Amazon::EC2::DescribeTags;
 
-$VERSION = '0.14';
+$VERSION = '0.15';
 
 =head1 NAME
 
@@ -66,9 +68,9 @@ environment.
 
 =head1 VERSION
 
-This document describes version 0.14 of Net::Amazon::EC2, released
-February 1st, 2010. This module is coded against the Query API version of the '2009-11-30' 
-version of the EC2 API last updated December 8th, 2009.
+This document describes version 0.15 of Net::Amazon::EC2, released
+January 18, 2012. This module is coded against the Query API version of the '2011-01-01' 
+version of the EC2 API last updated January 1st, 2011.
 
 =head1 SYNOPSIS
 
@@ -134,6 +136,10 @@ The region to run the API requests through. The options are:
 
 =back
 
+=item ssl (optional)
+
+If set to a true value, the base_url will use https:// instead of http://. Setting base_url explicitly will override this. Use depends on LWP::Protocol::https; if not installed it will die at runtime trying to fetch the url.
+
 =item debug (optional)
 
 A flag to turn on debugging. It is turned off by default
@@ -146,12 +152,15 @@ has 'AWSAccessKeyId'	=> ( is => 'ro', isa => 'Str', required => 1 );
 has 'SecretAccessKey'	=> ( is => 'ro', isa => 'Str', required => 1 );
 has 'debug'				=> ( is => 'ro', isa => 'Str', required => 0, default => 0 );
 has 'signature_version'	=> ( is => 'ro', isa => 'Int', required => 1, default => 1 );
-has 'version'			=> ( is => 'ro', isa => 'Str', required => 1, default => '2009-11-30' );
+has 'version'			=> ( is => 'ro', isa => 'Str', required => 1, default => '2011-01-01' );
 has 'region'			=> ( is => 'ro', isa => 'Str', required => 1, default => 'us-east-1' );
+has 'ssl'				=> ( is => 'ro', isa => 'Bool', required => 1, default => 0 );
 has 'timestamp'			=> ( 
 	is			=> 'ro', 
 	isa			=> 'Str', 
 	required	=> 1, 
+	lazy		=> 1,
+        clearer		=> '_clear_timestamp',
 	default		=> sub { 
 		my $ts = time2isoz(); 
 		chop($ts); 
@@ -166,7 +175,7 @@ has 'base_url'			=> (
 	required	=> 1,
 	lazy		=> 1,
 	default		=> sub {
-		return 'http://' . $_[0]->region . '.ec2.amazonaws.com';
+		return 'http' . ($_[0]->ssl ? 's' : '') . '://' . $_[0]->region . '.ec2.amazonaws.com';
 	}
 );
 
@@ -175,6 +184,7 @@ sub _sign {
 	my %args						= @_;
 	my $action						= delete $args{Action};
 	my %sign_hash					= %args;
+        $self->_clear_timestamp;
 	$sign_hash{AWSAccessKeyId}		= $self->AWSAccessKeyId;
 	$sign_hash{Action}				= $action;
 	$sign_hash{Timestamp}			= $self->timestamp;
@@ -204,6 +214,7 @@ sub _sign {
 	my $ur	= $uri->as_string();
 	$self->_debug("GENERATED QUERY URL: $ur");
 	my $ua	= LWP::UserAgent->new();
+    $ua->env_proxy;
 	my $res	= $ua->post($ur, \%params);
 	# We should force <item> elements to be in an array
 	my $xs	= XML::Simple->new(ForceArray => qr/(?:item|Errors)/i, KeyAttr => '');
@@ -840,6 +851,71 @@ sub create_snapshot {
 	}
 }
 
+=head2 create_tags(%params)
+
+Creates tags.
+
+=over
+
+=item ResourceId (required)
+
+The ID of the resource to create tags. Can be a scalar or arrayref
+
+=item Tags (required)
+
+Hashref where keys and values will be set on all resources given in the first element.
+
+=back
+
+Returns true if the tag creation succeeded.
+
+=cut
+
+sub create_tags {
+	my $self = shift;
+	my %args = validate( @_, {
+		ResourceId				=> { type => ARRAYREF | SCALAR },
+		Tags				    => { type => HASHREF },
+	});
+
+        if (ref ($args{'ResourceId'}) eq 'ARRAY') {
+                my $keys                        = delete $args{'ResourceId'};
+                my $count                       = 1;
+                foreach my $key (@{$keys}) {
+                        $args{"ResourceId." . $count} = $key;
+                        $count++;
+                }
+        }
+        else {
+                $args{"ResourceId.1"} = delete $args{'ResourceId'};
+        }
+
+	if (ref ($args{'Tags'}) eq 'HASH') {
+		my $count			= 1;
+        my $tags = delete $args{'Tags'};
+		foreach my $key ( keys %{$tags} ) {
+            last if $count > 10;
+			$args{"Tag." . $count . ".Key"} = $key;
+			$args{"Tag." . $count . ".Value"} = $tags->{$key};
+			$count++;
+		}
+	}
+
+	my $xml = $self->_sign(Action  => 'CreateTags', %args);
+
+	if ( grep { defined && length } $xml->{Errors} ) {
+		return $self->_parse_errors($xml);
+	}
+	else {
+		if ($xml->{return} eq 'true') {
+			return 1;
+		}
+		else {
+			return undef;
+		}
+	}
+}
+
 =head2 create_volume(%params)
 
 Creates a volume.
@@ -860,7 +936,8 @@ The availability zone to create the volume in.
 
 =back
 
-Returns true if the releasing succeeded.
+Returns a Net::Amazon::EC2::Volume object containing the resulting volume
+status
 
 =cut
 
@@ -1058,6 +1135,74 @@ sub delete_volume {
 		}
 	}
 }
+
+=head2 delete_tags(%params)
+
+Delete tags.
+
+=over
+
+=item ResourceId (required)
+
+The ID of the resource to delete tags
+
+=item Tag.Key (required)
+
+Key for a tag, may pass in a scalar or arrayref.
+
+=item Tag.Value (required)
+
+Value for a tag, may pass in a scalar or arrayref.
+
+=back
+
+Returns true if the releasing succeeded.
+
+=cut
+
+sub delete_tags {
+	my $self = shift;
+	my %args = validate( @_, {
+		ResourceId				=> { type => ARRAYREF | SCALAR },
+		'Tag.Key'				=> { type => ARRAYREF | SCALAR },
+		'Tag.Value'				=> { type => ARRAYREF | SCALAR, optional => 1 },
+	});
+
+	# If we have a array ref of keys lets split them out into their Tag.n.Key format
+	if (ref ($args{'Tag.Key'}) eq 'ARRAY') {
+		my $keys			= delete $args{'Tag.Key'};
+		my $count			= 1;
+		foreach my $key (@{$keys}) {
+			$args{"Tag." . $count . ".Key"} = $key;
+			$count++;
+		}
+	}
+
+	# If we have a array ref of values lets split them out into their Tag.n.Value format
+	if (ref ($args{'Tag.Value'}) eq 'ARRAY') {
+		my $values			= delete $args{'Tag.Value'};
+		my $count			= 1;
+		foreach my $value (@{$values}) {
+			$args{"Tag." . $count . ".Value"} = $value;
+			$count++;
+		}
+	}
+
+	my $xml = $self->_sign(Action  => 'DeleteTags', %args);
+
+	if ( grep { defined && length } $xml->{Errors} ) {
+		return $self->_parse_errors($xml);
+	}
+	else {
+		if ($xml->{return} eq 'true') {
+			return 1;
+		}
+		else {
+			return undef;
+		}
+	}
+}
+
 
 =head2 deregister_image(%params)
 
@@ -1562,10 +1707,11 @@ sub describe_instances {
 	}
 	else {
 		foreach my $reservation_set (@{$xml->{reservationSet}{item}}) {
-			my $group_sets;
+			my $group_sets=[];
 			foreach my $group_arr (@{$reservation_set->{groupSet}{item}}) {
 				my $group = Net::Amazon::EC2::GroupSet->new(
 					group_id => $group_arr->{groupId},
+					group_name => $group_arr->{groupName},
 				);
 				push @$group_sets, $group;
 			}
@@ -1629,7 +1775,19 @@ sub describe_instances {
 				}
 				
 				my $placement_response = Net::Amazon::EC2::PlacementResponse->new( availability_zone => $instance_elem->{placement}{availabilityZone} );
-				
+
+				my $tag_sets;
+				foreach my $tag_arr (@{$instance_elem->{tagSet}{item}}) {
+                    if ( ref $tag_arr->{value} eq "HASH" ) {
+                        $tag_arr->{value} = "";
+                    }
+					my $tag = Net::Amazon::EC2::TagSet->new(
+						key => $tag_arr->{key},
+						value => $tag_arr->{value},
+					);
+					push @$tag_sets, $tag;
+				}
+
 				my $running_instance = Net::Amazon::EC2::RunningInstances->new(
 					ami_launch_index		=> $instance_elem->{amiLaunchIndex},
 					dns_name				=> $instance_elem->{dnsName},
@@ -1655,6 +1813,7 @@ sub describe_instances {
 					root_device_type		=> $instance_elem->{rootDeviceType},
 					block_device_mapping	=> $block_device_mappings,
 					state_reason			=> $state_reason,
+					tag_set					=> $tag_sets,
 				);
 
 				if ($product_codes) {
@@ -2375,6 +2534,73 @@ sub describe_volumes {
 		}
 		
 		return $volumes;
+	}
+}
+
+=head2 describe_tags(%params)
+
+This method describes the tags available on this account. It takes the following parameter:
+
+=over
+
+=item Filter.Name (optional)
+
+The name of the Filter.Name to be described. Can be either a scalar or an array ref.
+
+=item Filter.Value (optional)
+
+The name of the Filter.Value to be described. Can be either a scalar or an array ref.
+
+=back
+
+Returns an array ref of Net::Amazon::EC2::DescribeTags objects
+
+=cut
+
+sub describe_tags {
+	my $self = shift;
+	my %args = validate( @_, {
+		'Filter.Name'				=> { type => ARRAYREF | SCALAR },
+		'Filter.Value'				=> { type => ARRAYREF | SCALAR },
+	});
+
+	if (ref ($args{'Filter.Name'}) eq 'ARRAY') {
+		my $keys			= delete $args{'Filter.Name'};
+		my $count			= 1;
+		foreach my $key (@{$keys}) {
+			$args{"Filter." . $count . ".Name"} = $key;
+			$count++;
+		}
+	}
+	if (ref ($args{'Filter.Value'}) eq 'ARRAY') {
+		my $keys			= delete $args{'Filter.Value'};
+		my $count			= 1;
+		foreach my $key (@{$keys}) {
+			$args{"Filter." . $count . ".Value"} = $key;
+			$count++;
+		}
+	}
+
+	my $xml = $self->_sign(Action  => 'DescribeTags', %args);
+
+	if ( grep { defined && length } $xml->{Errors} ) {
+		return $self->_parse_errors($xml);
+	}
+	else {	
+		my $tags;
+
+		foreach my $pair (@{$xml->{tagSet}{item}}) {
+			my $tag = Net::Amazon::EC2::DescribeTags->new(
+				resource_id		=> $pair->{resourceId},
+				resource_type	=> $pair->{resourceType},
+				key				=> $pair->{key},
+				value			=> $pair->{value},
+			);
+			
+			push @$tags, $tag;
+		}
+
+		return $tags;
 	}
 }
 
@@ -3339,7 +3565,7 @@ The availability zone you want to run the instance in
 The id of the kernel you want to launch the instance with
 
 =item RamdiskId (optional)
-  
+
 The id of the ramdisk you want to launch the instance with
 
 =item BlockDeviceMapping.VirtualName (optional)
@@ -3465,10 +3691,11 @@ sub run_instances {
 		return $self->_parse_errors($xml);
 	}
 	else {
-		my $group_sets;
+		my $group_sets=[];
 		foreach my $group_arr (@{$xml->{groupSet}{item}}) {
 			my $group = Net::Amazon::EC2::GroupSet->new(
 				group_id => $group_arr->{groupId},
+				group_name => $group_arr->{groupName},
 			);
 			push @$group_sets, $group;
 		}

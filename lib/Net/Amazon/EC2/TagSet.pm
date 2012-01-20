@@ -1,25 +1,30 @@
-package Net::Amazon::EC2::AvailabilityZoneMessage;
+package Net::Amazon::EC2::TagSet;
 use Moose;
 
 =head1 NAME
 
-Net::Amazon::EC2::AvailabilityZoneMessage
+Net::Amazon::EC2::TagSet
 
 =head1 DESCRIPTION
 
-A class containing messaging associated with an availability zone.
+A class containing information about a tag.
 
 =head1 ATTRIBUTES
 
 =over
 
-=item message (required)
+=item key (required)
 
-The message itself.
+The key of the tag.
+
+=item value (required)
+
+The value of the tag.
 
 =cut
 
-has 'message'  => ( is => 'ro', isa => 'Str', required => 1 );
+has 'key'   => ( is => 'ro', isa => 'Str', required => 1 );
+has 'value' => ( is => 'ro', isa => 'Str', required => 1 );
 
 __PACKAGE__->meta->make_immutable();
 
@@ -38,3 +43,4 @@ under the same terms as Perl itself.
 
 no Moose;
 1;
+
