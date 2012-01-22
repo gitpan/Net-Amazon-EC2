@@ -3,7 +3,6 @@ use inc::Module::Install;
 
 # Define metadata
 name            'Net-Amazon-EC2';
-license         'perl';
 all_from        'lib/Net/Amazon/EC2.pm';
 
 # Specific dependencies
@@ -17,6 +16,10 @@ requires		'Params::Validate'	=> 0;
 requires		'XML::Simple'		=> 2.18;
 requires        'Moose'             => 0.38;
 build_requires  'Test::More'        => 0;
+
+no_index;
+
+repository 'https://github.com/mrallen1/net-amazon-ec2';
 
 auto_install;
 WriteAll;
