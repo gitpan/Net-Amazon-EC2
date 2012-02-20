@@ -33,4 +33,4 @@ requires:
 resources:
   license: http://dev.perl.org/licenses/
   repository: https://github.com/mrallen1/net-amazon-ec2
-version: 0.16
+version: 0.17

@@ -59,7 +59,7 @@ use Net::Amazon::EC2::EbsBlockDevice;
 use Net::Amazon::EC2::TagSet;
 use Net::Amazon::EC2::DescribeTags;
 
-$VERSION = '0.16';
+$VERSION = '0.17';
 
 =head1 NAME
 
@@ -68,8 +68,8 @@ environment.
 
 =head1 VERSION
 
-This document describes version 0.15 of Net::Amazon::EC2, released
-January 18, 2012. This module is coded against the Query API version of the '2011-01-01' 
+This document describes version 0.17 of Net::Amazon::EC2, released
+February 20, 2012. This module is coded against the Query API version of the '2011-01-01' 
 version of the EC2 API last updated January 1st, 2011.
 
 =head1 SYNOPSIS
@@ -155,20 +155,6 @@ has 'signature_version'	=> ( is => 'ro', isa => 'Int', required => 1, default =>
 has 'version'			=> ( is => 'ro', isa => 'Str', required => 1, default => '2011-01-01' );
 has 'region'			=> ( is => 'ro', isa => 'Str', required => 1, default => 'us-east-1' );
 has 'ssl'				=> ( is => 'ro', isa => 'Bool', required => 1, default => 0 );
-has 'timestamp'			=> ( 
-	is			=> 'ro', 
-	isa			=> 'Str', 
-	required	=> 1, 
-	lazy		=> 1,
-        clearer		=> '_clear_timestamp',
-	default		=> sub { 
-		my $ts = time2isoz(); 
-		chop($ts); 
-		$ts .= '.000Z'; 
-		$ts =~ s/\s+/T/g; 
-		return $ts; 
-	} 
-);
 has 'base_url'			=> ( 
 	is			=> 'ro', 
 	isa			=> 'Str', 
@@ -178,6 +164,14 @@ has 'base_url'			=> (
 		return 'http' . ($_[0]->ssl ? 's' : '') . '://' . $_[0]->region . '.ec2.amazonaws.com';
 	}
 );
+
+sub timestamp {
+	my $ts = time2isoz();
+	chop($ts);
+	$ts .= '.000Z';
+	$ts =~ s/\s+/T/g;
+	return $ts;
+};
 
 sub _sign {
 	my $self						= shift;
@@ -293,6 +287,22 @@ sub _hashit {
 	my $encoded = encode_base64($hashed->digest, '');
 
 	return $encoded;
+}
+
+sub _build_filters {
+	my ($self, $args) = @_;
+	my $filters	= delete $args->{Filter};
+
+	return unless $filters && ref($filters) eq 'ARRAY';
+
+	$filters	= [ $filters ] unless ref($filters->[0]) eq 'ARRAY';
+	my $count	= 1;
+	foreach my $filter (@{$filters}) {
+		my ($name, @args) = @$filter;
+		$args->{"Filter." . $count.".Name"} = $name;
+		$args->{"Filter." . $count.".Value.".$_} = $args[$_-1] for 1..scalar @args;
+		$count++;
+	}
 }
 
 =head1 OBJECT METHODS
@@ -420,7 +430,7 @@ This method adds permissions to a security group.  It takes the following parame
 
 The name of the group to add security rules to.
 
-=item SourceSecurityGroupName (requred when authorizing a user and group together)
+=item SourceSecurityGroupName (required when authorizing a user and group together)
 
 Name of the group to add access for.
 
@@ -1629,6 +1639,7 @@ sub describe_images {
 					push @$block_device_mappings, $block_device_mapping;
 				}
 			}
+			$item->{description} = undef if ref ($item->{description});
 
 			my $image = Net::Amazon::EC2::DescribeImagesResponse->new(
 				image_id				=> $item->{imageId},
@@ -1677,6 +1688,12 @@ This method pulls a list of the instances which are running or were just running
 
 Either a scalar or an array ref can be passed in, will cause just these instances to be 'described'
 
+=item Filter (optional)
+
+The filters for only the matching instances to be 'described'.
+A filter tuple is an arrayref constsing one key and one or more values.
+The option takes one filter tuple, or an arrayref of multiple filter tuples.
+
 =back
 
 Returns an array ref of Net::Amazon::EC2::ReservationInfo objects
@@ -1686,7 +1703,8 @@ Returns an array ref of Net::Amazon::EC2::ReservationInfo objects
 sub describe_instances {
 	my $self = shift;
 	my %args = validate( @_, {
-		InstanceId => { type => SCALAR | ARRAYREF, optional => 1 },
+		InstanceId	=> { type => SCALAR | ARRAYREF, optional => 1 },
+		Filter		=> { type => ARRAYREF, optional => 1 },
 	});
 	
 	# If we have a array ref of instances lets split them out into their InstanceId.n format
@@ -1698,7 +1716,8 @@ sub describe_instances {
 			$count++;
 		}
 	}
-	
+
+	$self->_build_filters(\%args);
 	my $xml = $self->_sign(Action  => 'DescribeInstances', %args);
 	my $reservations;
 	
@@ -3418,7 +3437,7 @@ This method revoke permissions to a security group.  It takes the following para
 
 The name of the group to revoke security rules from.
 
-=item SourceSecurityGroupName (requred when revoking a user and group together)
+=item SourceSecurityGroupName (required when revoking a user and group together)
 
 Name of the group to revoke access from.
 
@@ -3592,6 +3611,10 @@ Enables monitoring for this instance.
 
 Specifies the subnet ID within which to launch the instance(s) for Amazon Virtual Private Cloud.
 
+=item ClientToken (optional)
+
+Specifies the idempotent instance id.
+
 =back
 
 Returns a Net::Amazon::EC2::ReservationInfo object
@@ -3623,6 +3646,7 @@ sub run_instances {
 		SubnetId										=> { type => SCALAR, optional => 1 },
 		DisableApiTermination							=> { type => SCALAR, optional => 1 },
 		InstanceInitiatedShutdownBehavior				=> { type => SCALAR, optional => 1 },
+		ClientToken										=> { type => SCALAR, optional => 1 },
 	});
 	
 	# If we have a array ref of instances lets split them out into their SecurityGroup.n format
