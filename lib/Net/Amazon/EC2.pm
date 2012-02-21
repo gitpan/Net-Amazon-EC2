@@ -59,7 +59,7 @@ use Net::Amazon::EC2::EbsBlockDevice;
 use Net::Amazon::EC2::TagSet;
 use Net::Amazon::EC2::DescribeTags;
 
-$VERSION = '0.17';
+$VERSION = '0.18';
 
 =head1 NAME
 
@@ -68,8 +68,8 @@ environment.
 
 =head1 VERSION
 
-This document describes version 0.17 of Net::Amazon::EC2, released
-February 20, 2012. This module is coded against the Query API version of the '2011-01-01' 
+This document describes version 0.18 of Net::Amazon::EC2, released
+February 21, 2012. This module is coded against the Query API version of the '2011-01-01' 
 version of the EC2 API last updated January 1st, 2011.
 
 =head1 SYNOPSIS
@@ -178,10 +178,11 @@ sub _sign {
 	my %args						= @_;
 	my $action						= delete $args{Action};
 	my %sign_hash					= %args;
-        $self->_clear_timestamp;
+	my $timestamp					= $self->timestamp;
+
 	$sign_hash{AWSAccessKeyId}		= $self->AWSAccessKeyId;
 	$sign_hash{Action}				= $action;
-	$sign_hash{Timestamp}			= $self->timestamp;
+	$sign_hash{Timestamp}			= $timestamp;
 	$sign_hash{Version}				= $self->version;
 	$sign_hash{SignatureVersion}	= $self->signature_version;
 	my $sign_this;
@@ -199,7 +200,7 @@ sub _sign {
 		Action				=> $action,
 		SignatureVersion	=> $self->signature_version,
 		AWSAccessKeyId		=> $self->AWSAccessKeyId,
-		Timestamp			=> $self->timestamp,
+		Timestamp			=> $timestamp,
 		Version				=> $self->version,
 		Signature			=> $encoded,
 		%args
