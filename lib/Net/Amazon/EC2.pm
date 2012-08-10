@@ -12,6 +12,7 @@ use MIME::Base64 qw(encode_base64 decode_base64);
 use HTTP::Date qw(time2isoz);
 use Params::Validate qw(validate SCALAR ARRAYREF HASHREF);
 use Data::Dumper qw(Dumper);
+use Carp;
 
 use Net::Amazon::EC2::DescribeImagesResponse;
 use Net::Amazon::EC2::DescribeKeyPairsResponse;
@@ -59,7 +60,7 @@ use Net::Amazon::EC2::EbsBlockDevice;
 use Net::Amazon::EC2::TagSet;
 use Net::Amazon::EC2::DescribeTags;
 
-$VERSION = '0.18';
+$VERSION = '0.19';
 
 =head1 NAME
 
@@ -68,9 +69,8 @@ environment.
 
 =head1 VERSION
 
-This document describes version 0.18 of Net::Amazon::EC2, released
-February 21, 2012. This module is coded against the Query API version of the '2011-01-01' 
-version of the EC2 API last updated January 1st, 2011.
+This is Net::Amazon::EC2 version 0.19
+EC2 Query API version: '2011-01-01' 
 
 =head1 SYNOPSIS
 
@@ -100,7 +100,7 @@ version of the EC2 API last updated January 1st, 2011.
 
  my $result = $ec2->terminate_instances(InstanceId => $instance_id);
 
-If an error occurs while communicating with EC2, the return value of these methods will be a Net::Amazon::EC2::Errors object.
+If an error occurs while communicating with EC2, these methods will throw a L<Net::Amazon::EC2::Errors> exception.
 
 =head1 DESCRIPTION
 
@@ -142,7 +142,16 @@ If set to a true value, the base_url will use https:// instead of http://. Setti
 
 =item debug (optional)
 
-A flag to turn on debugging. It is turned off by default
+A flag to turn on debugging. Among other useful things, it will make the failing api calls print an stack trace. It is turned off by default
+
+=item return_errors (optional)
+
+Previously, Net::Amazon::EC2 would return a L<Net::Amazon::EC2::Errors> 
+object when it encountered an error condition. As of 0.19, this 
+object is thrown as an exception using croak or confess depending on
+if the debug flag is set.
+
+If you want/need the old behavior, set this attribute to a true value.
 
 =back
 
@@ -155,6 +164,7 @@ has 'signature_version'	=> ( is => 'ro', isa => 'Int', required => 1, default =>
 has 'version'			=> ( is => 'ro', isa => 'Str', required => 1, default => '2011-01-01' );
 has 'region'			=> ( is => 'ro', isa => 'Str', required => 1, default => 'us-east-1' );
 has 'ssl'				=> ( is => 'ro', isa => 'Bool', required => 1, default => 0 );
+has 'return_errors'     => ( is => 'ro', isa => 'Bool', default => 0 );
 has 'base_url'			=> ( 
 	is			=> 'ro', 
 	isa			=> 'Str', 
@@ -212,7 +222,11 @@ sub _sign {
     $ua->env_proxy;
 	my $res	= $ua->post($ur, \%params);
 	# We should force <item> elements to be in an array
-	my $xs	= XML::Simple->new(ForceArray => qr/(?:item|Errors)/i, KeyAttr => '');
+	my $xs	= XML::Simple->new(
+        ForceArray => qr/(?:item|Errors)/i, # Always want item elements unpacked to arrays
+        KeyAttr => '',                      # Turn off folding for 'id', 'name', 'key' elements
+        SuppressEmpty => undef,             # Turn empty values into explicit undefs
+    );
 	my $xml;
 	
 	# Check the result for connectivity problems, if so throw an error
@@ -265,8 +279,18 @@ sub _parse_errors {
 	foreach my $error (@{$errors->errors}) {
 		$self->_debug("ERROR CODE: " . $error->code . " MESSAGE: " . $error->message . " FOR REQUEST: " . $errors->request_id);
 	}
-	
-	return $errors;	
+
+	# User wants old behaviour
+	if ($self->return_errors) {
+		return $errors;
+	}
+
+	# Print a stack trace if debugging is enabled
+	if ($self->debug) {
+		confess 'Last error was: ' . $es->[-1]->message;
+	} else {
+		croak $errors;
+	}
 }
 
 sub _debug {
@@ -2540,6 +2564,18 @@ sub describe_volumes {
  				push @$attachments, $attachment;
 			}
 			
+			my $tags;
+			foreach my $tag_arr (@{$volume_set->{tagSet}{item}}) {
+				if ( ref $tag_arr->{value} eq "HASH" ) {
+					$tag_arr->{value} = "";
+				}
+				my $tag = Net::Amazon::EC2::TagSet->new(
+					key => $tag_arr->{key},
+					value => $tag_arr->{value},
+				);
+				push @$tags, $tag;
+			}
+
 			my $volume = Net::Amazon::EC2::Volume->new(
 				volume_id		=> $volume_set->{volumeId},
 				status			=> $volume_set->{status},
@@ -2547,6 +2583,7 @@ sub describe_volumes {
 				create_time		=> $volume_set->{createTime},
 				snapshot_id		=> $volume_set->{snapshotId},
 				size			=> $volume_set->{size},
+				tag_set                 => $tags,
 				attachments		=> $attachments,
 			);
 			
@@ -2580,8 +2617,8 @@ Returns an array ref of Net::Amazon::EC2::DescribeTags objects
 sub describe_tags {
 	my $self = shift;
 	my %args = validate( @_, {
-		'Filter.Name'				=> { type => ARRAYREF | SCALAR },
-		'Filter.Value'				=> { type => ARRAYREF | SCALAR },
+		'Filter.Name'				=> { type => ARRAYREF | SCALAR, optional => 1 },
+		'Filter.Value'				=> { type => ARRAYREF | SCALAR, optional => 1 },
 	});
 
 	if (ref ($args{'Filter.Name'}) eq 'ARRAY') {
@@ -2864,7 +2901,7 @@ sub modify_image_attribute {
 
 =head2 modify_instance_attribute(%params)
 
-Modify an attribute of an instance. Only one attribute can be specified per call.
+Modify an attribute of an instance. 
 
 =over
 
@@ -2900,6 +2937,21 @@ The attribute we want to modify. Valid values are:
 
 The value to set the attribute to.
 
+You may also pass a hashref with one or more keys 
+and values. This hashref will be flattened and 
+passed to AWS.
+
+For example:
+
+  $ec2->modify_instance_attribute(
+        'InstanceId' => $id,
+        'Attribute' => 'blockDeviceMapping',
+        'Value' => {
+            'BlockDeviceMapping.1.DeviceName' => '/dev/sdf1',
+            'BlockDeviceMapping.1.Ebs.DeleteOnTermination' => 'true',
+        }
+  );            
+
 =back
 
 Returns 1 if the modification succeeds.
@@ -2911,8 +2963,14 @@ sub modify_instance_attribute {
 	my %args = validate( @_, {
 		InstanceId	=> { type => SCALAR },
 		Attribute	=> { type => SCALAR },
-		Value		=> { type => SCALAR },
+		Value		=> { type => SCALAR | HASHREF },
 	});
+
+    if ( ref($args{'Value'}) eq "HASH" ) {
+        # remove the 'Value' key and flatten the hashref
+        my $href = delete $args{'Value'};
+        map { $args{$_} = $href->{$_} } keys %{$href};
+    }
 	
 	my $xml = $self->_sign(Action  => 'ModifyInstanceAttribute', %args);
 
