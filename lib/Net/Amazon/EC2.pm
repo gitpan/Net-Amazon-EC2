@@ -60,7 +60,7 @@ use Net::Amazon::EC2::EbsBlockDevice;
 use Net::Amazon::EC2::TagSet;
 use Net::Amazon::EC2::DescribeTags;
 
-$VERSION = '0.20';
+$VERSION = '0.21';
 
 =head1 NAME
 
@@ -69,8 +69,9 @@ environment.
 
 =head1 VERSION
 
-This is Net::Amazon::EC2 version 0.19
-EC2 Query API version: '2011-01-01' 
+This is Net::Amazon::EC2 version 0.21
+
+EC2 Query API version: '2012-07-20'
 
 =head1 SYNOPSIS
 
@@ -161,7 +162,7 @@ has 'AWSAccessKeyId'	=> ( is => 'ro', isa => 'Str', required => 1 );
 has 'SecretAccessKey'	=> ( is => 'ro', isa => 'Str', required => 1 );
 has 'debug'				=> ( is => 'ro', isa => 'Str', required => 0, default => 0 );
 has 'signature_version'	=> ( is => 'ro', isa => 'Int', required => 1, default => 1 );
-has 'version'			=> ( is => 'ro', isa => 'Str', required => 1, default => '2011-01-01' );
+has 'version'			=> ( is => 'ro', isa => 'Str', required => 1, default => '2012-07-20' );
 has 'region'			=> ( is => 'ro', isa => 'Str', required => 1, default => 'us-east-1' );
 has 'ssl'				=> ( is => 'ro', isa => 'Bool', required => 1, default => 0 );
 has 'return_errors'     => ( is => 'ro', isa => 'Bool', default => 0 );
@@ -969,6 +970,16 @@ The optional snapshot id to create the volume from.
 
 The availability zone to create the volume in.
 
+=item VolumeType (optional)
+
+The volume type: 'standard' or 'io1'.  Defaults to 'standard'.
+
+=item Iops (optional)
+
+The number of I/O operations per second (IOPS) that the volume
+supports.  Required when the volume type is io1; not used with
+standard volumes.
+
 =back
 
 Returns a Net::Amazon::EC2::Volume object containing the resulting volume
@@ -982,6 +993,8 @@ sub create_volume {
 		Size				=> { type => SCALAR },
 		SnapshotId			=> { type => SCALAR, optional => 1 },
 		AvailabilityZone	=> { type => SCALAR },
+                VolumeType		=> { type => SCALAR, optional => 1 },
+                Iops			=> { type => SCALAR, optional => 1 },
 	});
 
 	my $xml = $self->_sign(Action  => 'CreateVolume', %args);
@@ -1003,6 +1016,8 @@ sub create_volume {
 			create_time		=> $xml->{createTime},
 			snapshot_id		=> $xml->{snapshotId},
 			size			=> $xml->{size},
+			volume_type		=> $xml->{volumeType},
+			iops			=> $xml->{iops},
 		);
 
 		return $volume;
@@ -1092,8 +1107,7 @@ Deletes the snapshots passed in. It takes the following arguments:
 
 =item SnapshotId (required)
 
-Either a scalar or array ref of snapshot id's can be passed in. Will delete the corresponding
-snapshots.
+A snapshot id can be passed in. Will delete the corresponding snapshot.
 
 =back
 
@@ -1104,22 +1118,11 @@ Returns true if the deleting succeeded.
 sub delete_snapshot {
 	my $self = shift;
 	my %args = validate( @_, {
-		SnapshotId	=> { type => ARRAYREF | SCALAR },
+		SnapshotId	=> { type => SCALAR },
 	});
 
-	# If we have a array ref of volumes lets split them out into their SnapshotId.n format
-	if (ref ($args{SnapshotId}) eq 'ARRAY') {
-		my $snapshots		= delete $args{SnapshotId};
-		my $count			= 1;
-		foreach my $snapshot (@{$snapshots}) {
-			$args{"SnapshotId." . $count} = $snapshot;
-			$count++;
-		}
-	}
-	
 	my $xml = $self->_sign(Action  => 'DeleteSnapshot', %args);
 
-	
 	if ( grep { defined && length } $xml->{Errors} ) {
 		return $self->_parse_errors($xml);
 	}
@@ -2583,6 +2586,8 @@ sub describe_volumes {
 				create_time		=> $volume_set->{createTime},
 				snapshot_id		=> $volume_set->{snapshotId},
 				size			=> $volume_set->{size},
+				volume_type		=> $volume_set->{volumeType},
+				iops			=> $volume_set->{iops},
 				tag_set                 => $tags,
 				attachments		=> $attachments,
 			);
@@ -3566,7 +3571,9 @@ sub revoke_security_group_ingress {
 
 =head2 run_instances(%params)
 
-This method will start instance(s) of AMIs on EC2. The parameters indicate which AMI to instantiate and how many / what properties they have:
+This method will start instance(s) of AMIs on EC2. The parameters
+indicate which AMI to instantiate and how many / what properties they
+have:
 
 =over
 
@@ -3600,13 +3607,21 @@ Optional data to pass into the instance being started.  Needs to be base64 encod
 
 =item InstanceType (optional)
 
-Specifies the type of instance to start.  The options are:
+Specifies the type of instance to start.
+
+See http://aws.amazon.com/ec2/instance-types
+
+The options are:
 
 =over
 
 =item m1.small (default)
 
-1 EC2 Compute Unit (1 virtual core with 1 EC2 Compute Unit). 32-bit, 1.7GB RAM, 160GB disk
+1 EC2 Compute Unit (1 virtual core with 1 EC2 Compute Unit). 32-bit or 64-bit, 1.7GB RAM, 160GB disk
+
+=item m1.medium Medium Instance
+
+2 EC2 Compute Units (1 virtual core with 2 EC2 Compute Unit), 32-bit or 64-bit, 3.75GB RAM, 410GB disk
 
 =item m1.large: Standard Large Instance
 
@@ -3616,23 +3631,43 @@ Specifies the type of instance to start.  The options are:
 
 8 EC2 Compute Units (4 virtual cores with 2 EC2 Compute Units each). 64-bit, 15GB RAM, 1690GB disk
 
+=item t1.micro Micro Instance
+
+Up to 2 EC2 Compute Units (for short periodic bursts), 32-bit or 64-bit, 613MB RAM, EBS storage only
+
 =item c1.medium: High-CPU Medium Instance
 
-5 EC2 Compute Units (2 virutal cores with 2.5 EC2 Compute Units each). 32-bit, 1.7GB RAM, 350GB disk
+5 EC2 Compute Units (2 virutal cores with 2.5 EC2 Compute Units each). 32-bit or 64-bit, 1.7GB RAM, 350GB disk
 
 =item c1.xlarge: High-CPU Extra Large Instance
 
 20 EC2 Compute Units (8 virtual cores with 2.5 EC2 Compute Units each). 64-bit, 7GB RAM, 1690GB disk
 
-=item m2.2xlarge
+=item m2.2xlarge High-Memory Double Extra Large Instance
 
 13 EC2 Compute Units (4 virtual cores with 3.25 EC2 Compute Units each). 64-bit, 34.2GB RAM, 850GB disk
 
-=item m2.4xlarge
+=item m2.4xlarge High-Memory Quadruple Extra Large Instance
 
 26 EC2 Compute Units (8 virtual cores with 3.25 EC2 Compute Units each). 64-bit, 68.4GB RAM, 1690GB disk
 
-=back 
+=item cc1.4xlarge Cluster Compute Quadruple Extra Large Instance
+
+33.5 EC2 Compute Units (2 x Intel Xeon X5570, quad-core "Nehalem" architecture), 64-bit, 23GB RAM, 1690GB disk, 10Gbit Ethernet
+
+=item cc1.8xlarge Cluster Compute Eight Extra Large Instance
+
+88 EC2 Compute Units (2 x Intel Xeon E5-2670, eight-core "Sandy Bridge" architecture), 64-bit, 60.5GB RAM, 3370GB disk, 10Gbit Ethernet
+
+=item cg1.4xlarge Cluster GPU Quadruple Extra Large Instance
+
+33.5 EC2 Compute Units (2 x Intel Xeon X5570, quad-core "Nehalem" architecture), 64-bit, 22GB RAM 1690GB disk, 10Gbit Ethernet, 2 x NVIDIA Tesla "Fermi" M2050 GPUs
+
+=item hi1.4xlarge High I/O Quadruple Extra Large Instance
+
+35 EC2 Compute Units (16 virtual cores), 60.5GB RAM, 64-bit, 2 x 1024GB SSD disk, 10Gbit Ethernet
+
+=back
 
 =item Placement.AvailabilityZone (optional)
 
@@ -3674,6 +3709,10 @@ Specifies the subnet ID within which to launch the instance(s) for Amazon Virtua
 
 Specifies the idempotent instance id.
 
+=item EbsOptimized (optional)
+
+Whether the instance is optimized for EBS I/O.
+
 =back
 
 Returns a Net::Amazon::EC2::ReservationInfo object
@@ -3706,6 +3745,7 @@ sub run_instances {
 		DisableApiTermination							=> { type => SCALAR, optional => 1 },
 		InstanceInitiatedShutdownBehavior				=> { type => SCALAR, optional => 1 },
 		ClientToken										=> { type => SCALAR, optional => 1 },
+		EbsOptimized										=> { type => SCALAR, optional => 1 },
 	});
 	
 	# If we have a array ref of instances lets split them out into their SecurityGroup.n format
