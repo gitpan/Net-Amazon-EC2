@@ -20,19 +20,19 @@ no_index:
   directory:
     - inc
     - t
-recommends:
-  LWP::Protocol::https: 0
 requires:
   Carp: 0
-  Digest::HMAC_SHA1: 1.01
-  HTTP::Date: 0
+  Digest::SHA: 0
+  LWP::Protocol::https: 0
   LWP::UserAgent: 0
   MIME::Base64: 0
   Moose: 0.38
+  POSIX: 0
   Params::Validate: 0
   URI: 0
+  URI::Escape: 0
   XML::Simple: 2.18
 resources:
   license: http://dev.perl.org/licenses/
   repository: https://github.com/mrallen1/net-amazon-ec2
-version: 0.21
+version: 0.22

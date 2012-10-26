@@ -6,12 +6,14 @@ use vars qw($VERSION);
 
 use XML::Simple;
 use LWP::UserAgent;
-use Digest::HMAC_SHA1;
+use LWP::Protocol::https;
+use Digest::SHA qw(hmac_sha256);
 use URI;
 use MIME::Base64 qw(encode_base64 decode_base64);
-use HTTP::Date qw(time2isoz);
+use POSIX qw(strftime);
 use Params::Validate qw(validate SCALAR ARRAYREF HASHREF);
 use Data::Dumper qw(Dumper);
+use URI::Escape qw(uri_escape_utf8);
 use Carp;
 
 use Net::Amazon::EC2::DescribeImagesResponse;
@@ -60,7 +62,7 @@ use Net::Amazon::EC2::EbsBlockDevice;
 use Net::Amazon::EC2::TagSet;
 use Net::Amazon::EC2::DescribeTags;
 
-$VERSION = '0.21';
+$VERSION = '0.22';
 
 =head1 NAME
 
@@ -69,7 +71,7 @@ environment.
 
 =head1 VERSION
 
-This is Net::Amazon::EC2 version 0.21
+This is Net::Amazon::EC2 version 0.22
 
 EC2 Query API version: '2012-07-20'
 
@@ -101,17 +103,20 @@ EC2 Query API version: '2012-07-20'
 
  my $result = $ec2->terminate_instances(InstanceId => $instance_id);
 
-If an error occurs while communicating with EC2, these methods will throw a L<Net::Amazon::EC2::Errors> exception.
+If an error occurs while communicating with EC2, these methods will 
+throw a L<Net::Amazon::EC2::Errors> exception.
 
 =head1 DESCRIPTION
 
-This module is a Perl interface to Amazon's Elastic Compute Cloud. It uses the Query API to communicate with Amazon's Web Services framework.
+This module is a Perl interface to Amazon's Elastic Compute Cloud. It uses the Query API to 
+communicate with Amazon's Web Services framework.
 
 =head1 CLASS METHODS
 
 =head2 new(%params)
 
-This is the constructor, it will return you a Net::Amazon::EC2 object to work with.  It takes these parameters:
+This is the constructor, it will return you a Net::Amazon::EC2 object to work with.  It takes 
+these parameters:
 
 =over
 
@@ -121,29 +126,22 @@ Your AWS access key.
 
 =item SecretAccessKey (required)
 
-Your secret key, WARNING! don't give this out or someone will be able to use your account and incur charges on your behalf.
+Your secret key, B<WARNING!> don't give this out or someone will be able to use your account 
+and incur charges on your behalf.
 
 =item region (optional)
 
-The region to run the API requests through. The options are:
-
-=over
-
-=item * us-east-1 - Nothern Virginia
-
-=item * us-west-1 - Northern California
-
-=item * eu-west-1 - Ireland
-
-=back
+The region to run the API requests through. Defaults to us-east-1.
 
 =item ssl (optional)
 
-If set to a true value, the base_url will use https:// instead of http://. Setting base_url explicitly will override this. Use depends on LWP::Protocol::https; if not installed it will die at runtime trying to fetch the url.
+If set to a true value, the base_url will use https:// instead of http://. Setting base_url 
+explicitly will override this. Defaults to true as of 0.22.
 
 =item debug (optional)
 
-A flag to turn on debugging. Among other useful things, it will make the failing api calls print an stack trace. It is turned off by default
+A flag to turn on debugging. Among other useful things, it will make the failing api calls print 
+a stack trace. It is turned off by default.
 
 =item return_errors (optional)
 
@@ -161,10 +159,10 @@ If you want/need the old behavior, set this attribute to a true value.
 has 'AWSAccessKeyId'	=> ( is => 'ro', isa => 'Str', required => 1 );
 has 'SecretAccessKey'	=> ( is => 'ro', isa => 'Str', required => 1 );
 has 'debug'				=> ( is => 'ro', isa => 'Str', required => 0, default => 0 );
-has 'signature_version'	=> ( is => 'ro', isa => 'Int', required => 1, default => 1 );
+has 'signature_version'	=> ( is => 'ro', isa => 'Int', required => 1, default => 2 );
 has 'version'			=> ( is => 'ro', isa => 'Str', required => 1, default => '2012-07-20' );
 has 'region'			=> ( is => 'ro', isa => 'Str', required => 1, default => 'us-east-1' );
-has 'ssl'				=> ( is => 'ro', isa => 'Bool', required => 1, default => 0 );
+has 'ssl'				=> ( is => 'ro', isa => 'Bool', required => 1, default => 1 );
 has 'return_errors'     => ( is => 'ro', isa => 'Bool', default => 0 );
 has 'base_url'			=> ( 
 	is			=> 'ro', 
@@ -177,13 +175,9 @@ has 'base_url'			=> (
 );
 
 sub timestamp {
-	my $ts = time2isoz();
-	chop($ts);
-	$ts .= '.000Z';
-	$ts =~ s/\s+/T/g;
-	return $ts;
-};
-
+    return strftime("%Y-%m-%dT%H:%M:%SZ",gmtime);
+}
+    
 sub _sign {
 	my $self						= shift;
 	my %args						= @_;
@@ -196,20 +190,29 @@ sub _sign {
 	$sign_hash{Timestamp}			= $timestamp;
 	$sign_hash{Version}				= $self->version;
 	$sign_hash{SignatureVersion}	= $self->signature_version;
-	my $sign_this;
+    $sign_hash{SignatureMethod}     = "HmacSHA256";
 
-	# The sign string must be alphabetical in a case-insensitive manner.
-	foreach my $key (sort { lc($a) cmp lc($b) } keys %sign_hash) {
-		$sign_this .= $key . $sign_hash{$key};
+	my $sign_this = "POST\n";
+	my $uri = URI->new($self->base_url);
+
+    $sign_this .= lc($uri->host) . "\n";
+    $sign_this .= "/\n";
+
+    my @signing_elements;
+
+	foreach my $key (sort keys %sign_hash) {
+		push @signing_elements, uri_escape_utf8($key)."=".uri_escape_utf8($sign_hash{$key});
 	}
+
+    $sign_this .= join "&", @signing_elements;
 
 	$self->_debug("QUERY TO SIGN: $sign_this");
 	my $encoded = $self->_hashit($self->SecretAccessKey, $sign_this);
 
-	my $uri = URI->new($self->base_url);
 	my %params = (
 		Action				=> $action,
 		SignatureVersion	=> $self->signature_version,
+        SignatureMethod     => "HmacSHA256",
 		AWSAccessKeyId		=> $self->AWSAccessKeyId,
 		Timestamp			=> $timestamp,
 		Version				=> $self->version,
@@ -307,12 +310,8 @@ sub _debug {
 sub _hashit {
 	my $self								= shift;
 	my ($secret_access_key, $query_string)	= @_;
-	my $hashed								= Digest::HMAC_SHA1->new($secret_access_key);
-	$hashed->add($query_string);
 	
-	my $encoded = encode_base64($hashed->digest, '');
-
-	return $encoded;
+	return encode_base64(hmac_sha256($query_string, $secret_access_key), '');
 }
 
 sub _build_filters {
@@ -4193,9 +4192,11 @@ machine instance usage charges (since there are 2 instances started) which as of
 Important note about the windows-only methods.  These have not been well tested as I do not run windows-based instances, so exercise
 caution in using these.
 
-=head1 TODO
+=head1 BUGS
 
-Need to add in support for Spot Instances.
+Please report any bugs or feature requests to C<bug-net-amazon-ec2 at rt.cpan.org>, or through
+the web interface at L<http://rt.cpan.org/NoAuth/ReportBug.html?Queue=Net-Amazon-EC2>.  I will 
+be notified, and then you'll automatically be notified of progress on your bug as I make changes.
 
 =head1 AUTHOR
 
@@ -4203,13 +4204,23 @@ Jeff Kim <cpan@chosec.com>
 
 =head1 CONTRIBUTORS
 
-John McCullough
+John McCullough and others as listed in the Changelog
+
+=head1 MAINTAINER
+
+The current maintainer is Mark Allen C<< <mallen@cpan.org> >>
 
 =head1 COPYRIGHT
 
-Copyright (c) 2006-2010 Jeff Kim. This program is free software; you can redistribute it and/or modify it
+Copyright (c) 2006-2010 Jeff Kim. 
+
+Copyright (c) 2012 Mark Allen.
+
+This program is free software; you can redistribute it and/or modify it
 under the same terms as Perl itself.
 
 =head1 SEE ALSO
 
 Amazon EC2 API: L<http://docs.amazonwebservices.com/AWSEC2/latest/APIReference/>
+
+=cut
