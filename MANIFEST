@@ -63,3 +63,4 @@ README
 t/00_use.t
 t/01_init.t
 t/02_live.t
+t/03_failing_calls.t

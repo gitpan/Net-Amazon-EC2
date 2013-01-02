@@ -62,7 +62,7 @@ use Net::Amazon::EC2::EbsBlockDevice;
 use Net::Amazon::EC2::TagSet;
 use Net::Amazon::EC2::DescribeTags;
 
-$VERSION = '0.22';
+$VERSION = '0.23';
 
 =head1 NAME
 
@@ -71,7 +71,7 @@ environment.
 
 =head1 VERSION
 
-This is Net::Amazon::EC2 version 0.22
+This is Net::Amazon::EC2 version 0.23
 
 EC2 Query API version: '2012-07-20'
 
@@ -363,9 +363,13 @@ Associates an elastic IP address with an instance. It takes the following argume
 
 The instance id you wish to associate the IP address with
 
-=item PublicIp (required)
+=item PublicIp (optional)
 
 The IP address to associate with
+
+=item AllocationId (optional)
+
+The allocation id if IP will be assigned in a virtual private cloud.
 
 =back
 
@@ -377,7 +381,8 @@ sub associate_address {
 	my $self = shift;
 	my %args = validate( @_, {
 		InstanceId		=> { type => SCALAR },
-		PublicIp 		=> { type => SCALAR },
+		PublicIp 		=> { type => SCALAR, optional => 1 },
+		AllocationId		=> { type => SCALAR, optional => 1 },
 	});
 	
 	my $xml = $self->_sign(Action  => 'AssociateAddress', %args);
@@ -481,7 +486,8 @@ The CIDR IP space we are adding access for.
 
 =back
 
-Adding a rule can be done in two ways: adding a source group name + source group owner id, or, by Protocol + start port + end port + CIDR IP.  The two are mutally exclusive.
+Adding a rule can be done in two ways: adding a source group name + source group owner id, or, 
+CIDR IP range. Both methods allow IP protocol, from port and to port specifications.
 
 Returns 1 if rule is added successfully.
 
@@ -499,7 +505,7 @@ sub authorize_security_group_ingress {
 		SourceSecurityGroupOwnerId	=> { type => SCALAR, optional => 1 },
 		IpProtocol 					=> { 
 			type => SCALAR,
-			depends => ['FromPort', 'ToPort', 'CidrIp'],
+			depends => ['FromPort', 'ToPort'],
 			optional => 1 
 		},
 		FromPort 					=> { type => SCALAR, optional => 1 },
