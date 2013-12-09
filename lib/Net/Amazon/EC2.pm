@@ -62,7 +62,7 @@ use Net::Amazon::EC2::EbsBlockDevice;
 use Net::Amazon::EC2::TagSet;
 use Net::Amazon::EC2::DescribeTags;
 
-$VERSION = '0.23';
+$VERSION = '0.24';
 
 =head1 NAME
 
@@ -71,7 +71,7 @@ environment.
 
 =head1 VERSION
 
-This is Net::Amazon::EC2 version 0.23
+This is Net::Amazon::EC2 version 0.24
 
 EC2 Query API version: '2012-07-20'
 
@@ -120,11 +120,11 @@ these parameters:
 
 =over
 
-=item AWSAccessKeyId (required)
+=item AWSAccessKeyId (required, unless an IAM role is present)
 
-Your AWS access key.
+Your AWS access key.  For information on IAM roles, see L<http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/UsingIAM.html#UsingIAMrolesWithAmazonEC2Instances>
 
-=item SecretAccessKey (required)
+=item SecretAccessKey (required, unless an IAM role is present)
 
 Your secret key, B<WARNING!> don't give this out or someone will be able to use your account 
 and incur charges on your behalf.
@@ -156,8 +156,30 @@ If you want/need the old behavior, set this attribute to a true value.
 
 =cut
 
-has 'AWSAccessKeyId'	=> ( is => 'ro', isa => 'Str', required => 1 );
-has 'SecretAccessKey'	=> ( is => 'ro', isa => 'Str', required => 1 );
+has 'AWSAccessKeyId'	=> ( is => 'ro',
+			     isa => 'Str',
+			     required => 1,
+			     lazy => 1,
+			     default => sub {
+				 if (defined($_[0]->temp_creds)) {
+				     return $_[0]->temp_creds->{'AccessKeyId'};
+				 } else {
+				     return undef;
+				 }
+			     }
+);
+has 'SecretAccessKey'	=> ( is => 'ro',
+			     isa => 'Str',
+			     required => 1,
+			     lazy => 1,
+			     default => sub {
+				 if (defined($_[0]->temp_creds)) {
+				     return $_[0]->temp_creds->{'SecretAccessKey'};
+				 } else {
+				     return undef;
+				 }
+			     }
+);
 has 'debug'				=> ( is => 'ro', isa => 'Str', required => 0, default => 0 );
 has 'signature_version'	=> ( is => 'ro', isa => 'Int', required => 1, default => 2 );
 has 'version'			=> ( is => 'ro', isa => 'Str', required => 1, default => '2012-07-20' );
@@ -173,11 +195,56 @@ has 'base_url'			=> (
 		return 'http' . ($_[0]->ssl ? 's' : '') . '://' . $_[0]->region . '.ec2.amazonaws.com';
 	}
 );
+has 'temp_creds'       => ( is => 'ro',
+			     lazy => 1,
+			     default => sub {
+				 my $ret;
+				 $ret = $_[0]->_fetch_iam_security_credentials();
+			     },
+			     predicate => 'has_temp_creds'
+);
+
 
 sub timestamp {
     return strftime("%Y-%m-%dT%H:%M:%SZ",gmtime);
 }
+
+sub _fetch_iam_security_credentials {
+    my $self = shift;
+    my $retval = {};
+
+    my $ua = LWP::UserAgent->new();
+    # Fail quickly if this is not running on an EC2 instance
+    $ua->timeout(2);
+
+    my $url = 'http://169.254.169.254/latest/meta-data/iam/security-credentials/';
     
+    $self->_debug("Attempting to fetch instance credentials");
+
+    my $res = $ua->get($url);
+    if ($res->code == 200) {
+	# Assumes the first profile is the only profile
+	my $profile = (split /\n/, $res->content())[0];
+
+	$res = $ua->get($url . $profile);
+
+	if ($res->code == 200) {
+	    $retval->{'Profile'} = $profile;
+	    foreach (split /\n/, $res->content()) {
+		return undef if /Code/ && !/Success/;
+		if (m/.*"([^"]+)"\s+:\s+"([^"]+)",/) {
+		    $retval->{$1} = $2;
+		}
+	    }
+
+	    return $retval if (keys %{$retval});
+	}
+	 
+    }
+   
+    return undef;
+}
+
 sub _sign {
 	my $self						= shift;
 	my %args						= @_;
@@ -191,6 +258,10 @@ sub _sign {
 	$sign_hash{Version}				= $self->version;
 	$sign_hash{SignatureVersion}	= $self->signature_version;
     $sign_hash{SignatureMethod}     = "HmacSHA256";
+	if ($self->has_temp_creds) {
+	    $sign_hash{SecurityToken} = $self->temp_creds->{'Token'};
+	}
+
 
 	my $sign_this = "POST\n";
 	my $uri = URI->new($self->base_url);
@@ -209,22 +280,13 @@ sub _sign {
 	$self->_debug("QUERY TO SIGN: $sign_this");
 	my $encoded = $self->_hashit($self->SecretAccessKey, $sign_this);
 
-	my %params = (
-		Action				=> $action,
-		SignatureVersion	=> $self->signature_version,
-        SignatureMethod     => "HmacSHA256",
-		AWSAccessKeyId		=> $self->AWSAccessKeyId,
-		Timestamp			=> $timestamp,
-		Version				=> $self->version,
-		Signature			=> $encoded,
-		%args
-	);
-	
+    my $content = join "&", @signing_elements, 'Signature=' . uri_escape_utf8($encoded);
+
 	my $ur	= $uri->as_string();
 	$self->_debug("GENERATED QUERY URL: $ur");
 	my $ua	= LWP::UserAgent->new();
     $ua->env_proxy;
-	my $res	= $ua->post($ur, \%params);
+	my $res	= $ua->post($ur, Content => $content);
 	# We should force <item> elements to be in an array
 	my $xs	= XML::Simple->new(
         ForceArray => qr/(?:item|Errors)/i, # Always want item elements unpacked to arrays
@@ -733,6 +795,19 @@ instance before image creation and reboots the instance afterwards. When set to 
 does not shut down the instance before creating the image. When this option is used, file system 
 integrity on the created image cannot be guaranteed. 
 
+=item BlockDeviceMapping (optional)
+
+Array ref of the device names exposed to the instance.
+
+You can specify device names as '<device>=<block_device>' similar to ec2-create-image command. (L<http://docs.aws.amazon.com/AWSEC2/latest/CommandLineReference/ApiReference-cmd-CreateImage.html>)
+
+  BlockDeviceMapping => [
+      '/dev/sda=:256:true:standard',
+      '/dev/sdb=none',
+      '/dev/sdc=ephemeral0',
+      '/dev/sdd=ephemeral1',
+     ],
+
 =back
 
 Returns the ID of the AMI created.
@@ -742,12 +817,43 @@ Returns the ID of the AMI created.
 sub create_image {
 	my $self = shift;
 	my %args = validate( @_, {
-		InstanceId	=> { type => SCALAR },
-		Name		=> { type => SCALAR },
-		Description	=> { type => SCALAR, optional => 1 },
-		NoReboot	=> { type => SCALAR, optional => 1 },
+		InstanceId			=> { type => SCALAR },
+		Name				=> { type => SCALAR },
+		Description			=> { type => SCALAR, optional => 1 },
+		NoReboot			=> { type => SCALAR, optional => 1 },
+		BlockDeviceMapping	=> { type => ARRAYREF, optional => 1 },
 	});
 		
+
+	if (my $bdm = delete $args{BlockDeviceMapping}) {
+		my $n = 0;
+		for my $bdme (@$bdm) {
+			my($device, $block_device) = split /=/, $bdme, 2;
+			$args{"BlockDeviceMapping.${n}.DeviceName"} = $device;
+
+			if ($block_device =~ /^ephemeral[0-9]+$/) {
+				$args{"BlockDeviceMapping.${n}.VirtualName"} = $block_device;
+			} elsif ($block_device eq 'none') {
+				$args{"BlockDeviceMapping.${n}.NoDevice"} = '';
+			} else {
+				my @keys = qw(
+								 Ebs.SnapshotId
+								 Ebs.VolumeSize
+								 Ebs.DeleteOnTermination
+								 Ebs.VolumeType
+								 Ebs.Iops
+							);
+				for my $bde (split /:/, $block_device) {
+					my $key = shift @keys;
+					next unless $bde;
+					$args{"BlockDeviceMapping.${n}.${key}"} = $bde;
+				}
+			}
+
+			$n++;
+		}
+	}
+
 	my $xml = $self->_sign(Action  => 'CreateImage', %args);
 
 	if ( grep { defined && length } $xml->{Errors} ) {
@@ -2007,7 +2113,6 @@ sub describe_instance_attribute {
 				push @$block_mappings, $block_device_mapping;
 			}
 
-			warn Dumper($block_mappings);
 			$attribute_response = Net::Amazon::EC2::DescribeInstanceAttributeResponse->new(
 				instance_id				=> $xml->{instanceId},
 				block_device_mapping	=> $block_mappings,
@@ -2451,6 +2556,13 @@ The owner of the snapshot.
 
 A user who can create volumes from the snapshot.
 
+=item Filter (optional)
+
+The filters for only the matching snapshots to be 'described'.  A
+filter tuple is an arrayref constsing one key and one or more values.
+The option takes one filter tuple, or an arrayref of multiple filter
+tuples.
+
 =back
 
 Returns an array ref of Net::Amazon::EC2::Snapshot objects.
@@ -2463,7 +2575,10 @@ sub describe_snapshots {
 		SnapshotId		=> { type => ARRAYREF | SCALAR, optional => 1 },
 		Owner			=> { type => SCALAR, optional => 1 },
 		RestorableBy	=> { type => SCALAR, optional => 1 },
+		Filter		=> { type => ARRAYREF, optional => 1 },
 	});
+
+	$self->_build_filters(\%args);
 
 	# If we have a array ref of volumes lets split them out into their SnapshotId.n format
 	if (ref ($args{SnapshotId}) eq 'ARRAY') {
@@ -3602,6 +3717,10 @@ The keypair name to associate this instance with.  If omitted, will use your def
 
 An scalar or array ref. Will associate this instance with the group names passed in.  If omitted, will be associated with the default security group.
 
+=item SecurityGroupId (optional)
+
+An scalar or array ref. Will associate this instance with the group ids passed in.  If omitted, will be associated with the default security group.
+
 =item AdditionalInfo (optional)
 
 Specifies additional information to make available to the instance(s).
@@ -3718,6 +3837,19 @@ Specifies the idempotent instance id.
 
 Whether the instance is optimized for EBS I/O.
 
+=item PrivateIpAddress (optional)
+
+Specifies the private IP address to use when launching an Amazon VPC instance.
+
+=item IamInstanceProfile.Name (optional)
+
+Specifies the IAM profile to associate with the launched instance(s).  This is the name of the role.
+
+=item IamInstanceProfile.Arn (optional)
+
+Specifies the IAM profile to associate with the launched instance(s).  This is the ARN of the profile.
+
+
 =back
 
 Returns a Net::Amazon::EC2::ReservationInfo object
@@ -3732,6 +3864,8 @@ sub run_instances {
 		MaxCount										=> { type => SCALAR },
 		KeyName											=> { type => SCALAR, optional => 1 },
 		SecurityGroup									=> { type => SCALAR | ARRAYREF, optional => 1 },
+		SecurityGroupId									=> { type => SCALAR | ARRAYREF, optional => 1 },
+		AddressingType									=> { type => SCALAR, optional => 1 },
 		AdditionalInfo									=> { type => SCALAR, optional => 1 },
 		UserData										=> { type => SCALAR, optional => 1 },
 		InstanceType									=> { type => SCALAR, optional => 1 },
@@ -3750,7 +3884,11 @@ sub run_instances {
 		DisableApiTermination							=> { type => SCALAR, optional => 1 },
 		InstanceInitiatedShutdownBehavior				=> { type => SCALAR, optional => 1 },
 		ClientToken										=> { type => SCALAR, optional => 1 },
-		EbsOptimized										=> { type => SCALAR, optional => 1 },
+		EbsOptimized									=> { type => SCALAR, optional => 1 },
+		PrivateIpAddress								=> { type => SCALAR, optional => 1 },
+		'IamInstanceProfile.Name'								=> { type => SCALAR, optional => 1 },
+		'IamInstanceProfile.Arn'								=> { type => SCALAR, optional => 1 },
+
 	});
 	
 	# If we have a array ref of instances lets split them out into their SecurityGroup.n format
@@ -3759,6 +3897,16 @@ sub run_instances {
 		my $count			= 1;
 		foreach my $security_group (@{$security_groups}) {
 			$args{"SecurityGroup." . $count} = $security_group;
+			$count++;
+		}
+	}
+
+	# If we have a array ref of instances lets split them out into their SecurityGroupId.n format
+	if (ref ($args{SecurityGroupId}) eq 'ARRAY') {
+		my $security_groups	= delete $args{SecurityGroupId};
+		my $count			= 1;
+		foreach my $security_group (@{$security_groups}) {
+			$args{"SecurityGroupId." . $count} = $security_group;
 			$count++;
 		}
 	}
