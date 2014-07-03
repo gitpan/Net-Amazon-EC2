@@ -62,7 +62,7 @@ use Net::Amazon::EC2::EbsBlockDevice;
 use Net::Amazon::EC2::TagSet;
 use Net::Amazon::EC2::DescribeTags;
 
-$VERSION = '0.24';
+$VERSION = '0.25';
 
 =head1 NAME
 
@@ -71,7 +71,7 @@ environment.
 
 =head1 VERSION
 
-This is Net::Amazon::EC2 version 0.24
+This is Net::Amazon::EC2 version 0.25
 
 EC2 Query API version: '2012-07-20'
 
@@ -129,6 +129,11 @@ Your AWS access key.  For information on IAM roles, see L<http://docs.aws.amazon
 Your secret key, B<WARNING!> don't give this out or someone will be able to use your account 
 and incur charges on your behalf.
 
+=item SecurityToken (optional)
+
+When using temporary credentials from STS the Security Token must be passed
+in along with the temporary AWSAccessKeyId and SecretAccessKey.  The most common case is when using IAM credentials with the addition of MFA (multi-factor authentication).  See L<http://docs.aws.amazon.com/STS/latest/UsingSTS/Welcome.html>
+
 =item region (optional)
 
 The region to run the API requests through. Defaults to us-east-1.
@@ -175,6 +180,19 @@ has 'SecretAccessKey'	=> ( is => 'ro',
 			     default => sub {
 				 if (defined($_[0]->temp_creds)) {
 				     return $_[0]->temp_creds->{'SecretAccessKey'};
+				 } else {
+				     return undef;
+				 }
+			     }
+);
+has 'SecurityToken'	=> ( is => 'ro',
+			     isa => 'Str',
+			     required => 0,
+			     lazy => 1,
+			     predicate => 'has_SecurityToken',
+			     default => sub {
+				 if (defined($_[0]->temp_creds)) {
+				     return $_[0]->temp_creds->{'Token'};
 				 } else {
 				     return undef;
 				 }
@@ -258,8 +276,8 @@ sub _sign {
 	$sign_hash{Version}				= $self->version;
 	$sign_hash{SignatureVersion}	= $self->signature_version;
     $sign_hash{SignatureMethod}     = "HmacSHA256";
-	if ($self->has_temp_creds) {
-	    $sign_hash{SecurityToken} = $self->temp_creds->{'Token'};
+	if ($self->has_temp_creds || $self->has_SecurityToken) {
+	    $sign_hash{SecurityToken} = $self->SecurityToken;
 	}
 
 
@@ -2896,7 +2914,9 @@ A scalar containing a instance id.
 
 =back
 
-Returns a Net::Amazon::EC2::ConsoleOutput object.
+Returns a Net::Amazon::EC2::ConsoleOutput object or C<undef> if there is no
+new output. (This can happen in cases where the console output has not changed
+since the last call.)
 
 =cut
 
@@ -2913,13 +2933,17 @@ sub get_console_output {
 		return $self->_parse_errors($xml);
 	}
 	else {
-		my $console_output = Net::Amazon::EC2::ConsoleOutput->new(
-			instance_id	=> $xml->{instanceId},
-			timestamp	=> $xml->{timestamp},
-			output		=> decode_base64($xml->{output}),
-		);
-		
-		return $console_output;
+		if ( grep { defined && length } $xml->{output} ) {
+			my $console_output = Net::Amazon::EC2::ConsoleOutput->new(
+				instance_id	=> $xml->{instanceId},
+				timestamp	=> $xml->{timestamp},
+				output		=> decode_base64($xml->{output}),
+			);
+			return $console_output;
+		}
+		else {
+			return undef;
+		}
 	}
 }
 
@@ -3345,42 +3369,42 @@ This method registers an AMI on the EC2. It takes the following parameter:
 
 =over
 
-=item imageLocation (optional)
+=item ImageLocation (optional)
 
 The location of the AMI manifest on S3
 
-=item name (required)
+=item Name (required)
 
 The name of the AMI that was provided during image creation.
 
-=item description (optional)
+=item Description (optional)
 
 The description of the AMI.
 
-=item architecture (optional)
+=item Architecture (optional)
 
 The architecture of the image. Either i386 or x86_64
 
-=item kernelId (optional)
+=item KernelId (optional)
 
 The ID of the kernel to select. 
 
-=item ramdiskId (optional)
+=item RamdiskId (optional)
 
 The ID of the RAM disk to select. Some kernels require additional drivers at launch. 
 
-=item rootDeviceName (optional)
+=item RootDeviceName (optional)
 
 The root device name (e.g., /dev/sda1).
 
-=item blockDeviceMapping (optional)
+=item BlockDeviceMapping (optional)
 
 This needs to be a data structure like this:
 
-[
+ [
 	{
 		deviceName	=> "/dev/sdh", (optional)
-		virtualName	=> "ephermel0", (optional)
+		virtualName	=> "ephemerel0", (optional)
 		noDevice	=> "/dev/sdl", (optional),
 		ebs			=> {
 			snapshotId			=> "snap-0000", (optional)
@@ -3389,7 +3413,7 @@ This needs to be a data structure like this:
 		},
 	},
 	...
-]	
+ ]	
 
 =back
 
@@ -3876,6 +3900,7 @@ sub run_instances {
 		'BlockDeviceMapping.DeviceName'					=> { type => SCALAR | ARRAYREF, optional => 1 },
 		'BlockDeviceMapping.Ebs.SnapshotId'				=> { type => SCALAR | ARRAYREF, optional => 1 },
 		'BlockDeviceMapping.Ebs.VolumeSize'				=> { type => SCALAR | ARRAYREF, optional => 1 },
+		'BlockDeviceMapping.Ebs.VolumeType'				=> { type => SCALAR | ARRAYREF, optional => 1 },
 		'BlockDeviceMapping.Ebs.DeleteOnTermination'	=> { type => SCALAR | ARRAYREF, optional => 1 },
 		Encoding										=> { type => SCALAR, optional => 1 },
 		Version											=> { type => SCALAR, optional => 1 },
@@ -3947,6 +3972,16 @@ sub run_instances {
 		my $count			= 1;
 		foreach my $volume_size (@{$volume_sizes}) {
 			$args{"BlockDeviceMapping." . $count . ".Ebs.VolumeSize"} = $volume_size;
+			$count++;
+		}
+	}
+
+	# If we have a array ref of block device EBS VolumeTypes lets split them out into their BlockDeviceMapping.n.Ebs.VolumeType format
+	if (ref ($args{'BlockDeviceMapping.Ebs.VolumeType'}) eq 'ARRAY') {
+		my $volume_types	= delete $args{'BlockDeviceMapping.Ebs.VolumeType'};
+		my $count			= 1;
+		foreach my $volume_type (@{$volume_types}) {
+			$args{"BlockDeviceMapping." . $count . ".Ebs.VolumeType"} = $volume_type;
 			$count++;
 		}
 	}
