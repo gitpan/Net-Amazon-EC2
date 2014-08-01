@@ -62,7 +62,7 @@ use Net::Amazon::EC2::EbsBlockDevice;
 use Net::Amazon::EC2::TagSet;
 use Net::Amazon::EC2::DescribeTags;
 
-$VERSION = '0.26';
+$VERSION = '0.27';
 
 =head1 NAME
 
@@ -71,7 +71,7 @@ environment.
 
 =head1 VERSION
 
-This is Net::Amazon::EC2 version 0.26
+This is Net::Amazon::EC2 version 0.27
 
 EC2 Query API version: '2014-06-15'
 
@@ -414,7 +414,7 @@ sub _build_filters {
 
 =head2 allocate_address()
 
-Acquires an elastic IP address which can be associated with an instance to create a movable static IP. Takes no arguments
+Acquires an elastic IP address which can be associated with an EC2-classic instance to create a movable static IP. Takes no arguments.
 
 Returns the IP address obtained.
 
@@ -433,6 +433,27 @@ sub allocate_address {
 	}
 }
 
+=head2 allocate_vpc_address()
+
+Acquires an elastic IP address which can be associated with a VPC instance to create a movable static IP. Takes no arguments.
+
+Returns the allocationId of the allocated address.
+
+=cut
+
+sub allocate_vpc_address {
+        my $self = shift;
+
+        my $xml = $self->_sign(Action  => 'AllocateAddress', Domain => 'vpc');
+
+        if ( grep { defined && length } $xml->{Errors} ) {
+                return $self->_parse_errors($xml);
+        }
+        else {
+                return $xml->{allocationId};
+        }
+}
+
 =head2 associate_address(%params)
 
 Associates an elastic IP address with an instance. It takes the following arguments:
@@ -445,11 +466,11 @@ The instance id you wish to associate the IP address with
 
 =item PublicIp (optional)
 
-The IP address to associate with
+The IP address. Used for allocating addresses to EC2-classic instances.
 
 =item AllocationId (optional)
 
-The allocation id if IP will be assigned in a virtual private cloud.
+The allocation ID.  Used for allocating address to VPC instances.
 
 =back
 
@@ -1089,11 +1110,12 @@ Creates a volume.
 
 =item Size (required)
 
-The size in GiB of the volume you want to create.
+The size in GiB ( 1024^3 ) of the volume you want to create.
 
 =item SnapshotId (optional)
 
-The optional snapshot id to create the volume from.
+The optional snapshot id to create the volume from. The volume must
+be equal or larger than the snapshot it was created from.
 
 =item AvailabilityZone (required)
 
@@ -1101,13 +1123,15 @@ The availability zone to create the volume in.
 
 =item VolumeType (optional)
 
-The volume type: 'standard' or 'io1'.  Defaults to 'standard'.
+The volume type: 'standard', 'gp2', or 'io1'.  Defaults to 'standard'.
 
-=item Iops (optional)
+=item Iops (required if VolumeType is 'io1')
 
 The number of I/O operations per second (IOPS) that the volume
-supports.  Required when the volume type is io1; not used with
-standard volumes.
+supports. This is limited to 30 times the volume size with an absolute maximum
+of 4000. It's likely these numbers will change in the future.
+
+Required when the volume type is io1; not used otherwise.
 
 =item Encrypted (optional)
 
@@ -2398,6 +2422,10 @@ This method describes the security groups available to this account. It takes th
 
 The name of the security group(s) to be described. Can be either a scalar or an array ref.
 
+=item GroupId (optional)
+
+The id of the security group(s) to be described. Can be either a scalar or an array ref.
+
 =back
 
 Returns an array ref of Net::Amazon::EC2::SecurityGroup objects
@@ -2408,18 +2436,27 @@ sub describe_security_groups {
 	my $self = shift;
 	my %args = validate( @_, {
 		GroupName => { type => SCALAR | ARRAYREF, optional => 1 },
+		GroupId => { type => SCALAR | ARRAYREF, optional => 1 },
 	});
 
-	# If we have a array ref of instances lets split them out into their InstanceId.n format
+	# If we have a array ref of GroupNames lets split them out into their GroupName.n format
 	if (ref ($args{GroupName}) eq 'ARRAY') {
 		my $groups = delete $args{GroupName};
 		my $count = 1;
 		foreach my $group (@{$groups}) {
-			$args{"GroupName." . $count} = $group;
-			$count++;
+			$args{"GroupName." . $count++} = $group;
 		}
 	}
 	
+	# If we have a array ref of GroupIds lets split them out into their GroupId.n format
+	if (ref ($args{GroupId}) eq 'ARRAY') {
+		my $groups = delete $args{GroupId};
+		my $count = 1;
+		foreach my $group (@{$groups}) {
+			$args{"GroupId." . $count++} = $group;
+		}
+	}
+
 	my $xml = $self->_sign(Action  => 'DescribeSecurityGroups', %args);
 	
 	if ( grep { defined && length } $xml->{Errors} ) {
@@ -2430,8 +2467,10 @@ sub describe_security_groups {
 		foreach my $sec_grp (@{$xml->{securityGroupInfo}{item}}) {
 			my $owner_id = $sec_grp->{ownerId};
 			my $group_name = $sec_grp->{groupName};
+			my $group_id = $sec_grp->{groupId};
 			my $group_description = $sec_grp->{groupDescription};
 			my $ip_permissions;
+			my $ip_permissions_egress;
 
 			foreach my $ip_perm (@{$sec_grp->{ipPermissions}{item}}) {
 				my $ip_protocol = $ip_perm->{ipProtocol};
@@ -2483,11 +2522,63 @@ sub describe_security_groups {
 				push @$ip_permissions, $ip_permission;
 			}
 			
+			foreach my $ip_perm (@{$sec_grp->{ipPermissionsEgress}{item}}) {
+				my $ip_protocol = $ip_perm->{ipProtocol};
+				my $from_port	= $ip_perm->{fromPort};
+				my $to_port		= $ip_perm->{toPort};
+				my $icmp_port	= $ip_perm->{icmpPort};
+				my $groups;
+				my $ip_ranges;
+				
+				if (grep { defined && length } $ip_perm->{groups}{item}) {
+					foreach my $grp (@{$ip_perm->{groups}{item}}) {
+						my $group = Net::Amazon::EC2::UserIdGroupPair->new(
+							user_id		=> $grp->{userId},
+							group_name	=> $grp->{groupName},
+						);
+						
+						push @$groups, $group;
+					}
+				}
+				
+				if (grep { defined && length } $ip_perm->{ipRanges}{item}) {
+					foreach my $rng (@{$ip_perm->{ipRanges}{item}}) {
+						my $ip_range = Net::Amazon::EC2::IpRange->new(
+							cidr_ip => $rng->{cidrIp},
+						);
+						
+						push @$ip_ranges, $ip_range;
+					}
+				}
+
+								
+				my $ip_permission = Net::Amazon::EC2::IpPermission->new(
+					ip_protocol			=> $ip_protocol,
+					group_name			=> $group_name,
+					group_description	=> $group_description,
+					from_port			=> $from_port,
+					to_port				=> $to_port,
+					icmp_port			=> $icmp_port,
+				);
+				
+				if ($ip_ranges) {
+					$ip_permission->ip_ranges($ip_ranges);
+				}
+
+				if ($groups) {
+					$ip_permission->groups($groups);
+				}
+				
+				push @$ip_permissions_egress, $ip_permission;
+			}
+
 			my $security_group = Net::Amazon::EC2::SecurityGroup->new(
 				owner_id			=> $owner_id,
 				group_name			=> $group_name,
+				group_id			=> $group_id,
 				group_description	=> $group_description,
 				ip_permissions		=> $ip_permissions,
+				ip_permissions_egress	=> $ip_permissions_egress,
 			);
 			
 			push @$security_groups, $security_group;
