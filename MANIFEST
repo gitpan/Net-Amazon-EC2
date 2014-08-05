@@ -25,15 +25,19 @@ lib/Net/Amazon/EC2/DescribeImagesResponse.pm
 lib/Net/Amazon/EC2/DescribeInstanceAttributeResponse.pm
 lib/Net/Amazon/EC2/DescribeKeyPairsResponse.pm
 lib/Net/Amazon/EC2/DescribeTags.pm
+lib/Net/Amazon/EC2/Details.pm
 lib/Net/Amazon/EC2/EbsBlockDevice.pm
 lib/Net/Amazon/EC2/EbsInstanceBlockDeviceMapping.pm
 lib/Net/Amazon/EC2/Error.pm
 lib/Net/Amazon/EC2/Errors.pm
+lib/Net/Amazon/EC2/Events.pm
 lib/Net/Amazon/EC2/GroupSet.pm
 lib/Net/Amazon/EC2/InstanceBlockDeviceMapping.pm
 lib/Net/Amazon/EC2/InstancePassword.pm
 lib/Net/Amazon/EC2/InstanceState.pm
 lib/Net/Amazon/EC2/InstanceStateChange.pm
+lib/Net/Amazon/EC2/InstanceStatus.pm
+lib/Net/Amazon/EC2/InstanceStatuses.pm
 lib/Net/Amazon/EC2/IpPermission.pm
 lib/Net/Amazon/EC2/IpRange.pm
 lib/Net/Amazon/EC2/KeyPair.pm
@@ -52,6 +56,7 @@ lib/Net/Amazon/EC2/SecurityGroup.pm
 lib/Net/Amazon/EC2/Snapshot.pm
 lib/Net/Amazon/EC2/SnapshotAttribute.pm
 lib/Net/Amazon/EC2/StateReason.pm
+lib/Net/Amazon/EC2/SystemStatus.pm
 lib/Net/Amazon/EC2/TagSet.pm
 lib/Net/Amazon/EC2/UserData.pm
 lib/Net/Amazon/EC2/UserIdGroupPair.pm
