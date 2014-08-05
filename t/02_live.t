@@ -9,7 +9,7 @@ BEGIN {
         plan skip_all => "Set AWS_ACCESS_KEY_ID and SECRET_ACCESS_KEY environment variables to run these _LIVE_ tests (NOTE: they will incur one instance hour of costs from EC2)";
     }
     else {
-        plan tests => 28;
+        plan tests => 29;
         use_ok( 'Net::Amazon::EC2' );
     }
 };
@@ -191,6 +191,21 @@ my $delete_tags_result = $ec2->delete_tags(
 );
 ok($delete_tags_result == 1, "Checking for delete tags");
 
+note("Describe instance status test takes up to 120 seconds to complete. Be patient.");
+my $instance_statuses;
+my $loop_count = 0;
+while ( $loop_count < 20 ) {
+    $instance_statuses = $ec2->describe_instance_status(); 
+    if ( not defined $instance_statuses->[0] ) {
+        sleep 5;
+        $loop_count++;
+        next;
+    }
+    else {
+        last;
+    }
+}
+isa_ok($instance_statuses->[0], 'Net::Amazon::EC2::InstanceStatuses');
 
 # terminate_instances
 my $terminate_result = $ec2->terminate_instances(InstanceId => $instance_id);
@@ -227,12 +242,15 @@ foreach my $offering (@{$reserved_instance_offerings}) {
 }
 ok($seen_offering == 1, "Describing Reserved Instances Offerings");
 
+note("Delete security group test takes up to 120 seconds to complete. Be patient.");
 # delete_security_group
-while (1) {
+$loop_count = 0;
+while ( $loop_count < 20 ) {
     $delete_group_result = $ec2->delete_security_group(GroupName => "test_group");
     if ( ref($delete_group_result) =~ /Error/ ) {
         # If we get an error, loop until we don't
         sleep 5;
+        $loop_count++;
         next;
     }
     else {
@@ -254,6 +272,5 @@ ok($describe_volume->[0]->volume_id, $volume->volume_id);
 
 my $delete_volume = $ec2->delete_volume( { VolumeId => $volume->volume_id } );
 ok($delete_volume == 1, "Deleting volume");
-
 
 # THE REST OF THE METHODS ARE SKIPPED FOR NOW SINCE IT WOULD REQUIRE A DECENT AMOUNT OF TIME IN BETWEEN OPERATIONS TO COMPLETE
